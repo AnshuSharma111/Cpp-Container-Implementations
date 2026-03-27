@@ -11,13 +11,12 @@ private:
     size_t _capacity;
     T* _array;
 
-    // function to double array size
-    void grow() {
+    // function to resize array
+    void resize(size_t new_capacity) {
         // new T() => allocate memory + manage lifetime
         // ::operator new => only allocate memory
         // new loc T() => gice allocated memory loc, construct object there
 
-        size_t new_capacity = std::max(size_t(4), _capacity * 2);
         T* new_array = static_cast<T*>(::operator new[](new_capacity * sizeof(T))); // get raw memory
 
         size_t i = 0;
@@ -51,54 +50,94 @@ private:
         _array = new_array;
     }
 
-    // function to half array size
+    // double array size
+    void grow() {
+        size_t new_capacity = std::max(size_t(4), _capacity * 2);
+        resize(new_capacity);
+    }
+
+    // half array size
     void shrink() {
-        size_t new_capacity = std::max(size_t(4), capacity / 2);
-        T* new_array = nullptr;
-
-        try {
-            new_array = new T[new_capacity];
-            std::move(array, array + size, new_array);
-        }
-        catch (...) {
-            delete[] new_array;
-            throw;
-        }
-
-        delete[] array;
-        array = new_array;
-        capacity = new_capacity;
+        size_t new_capacity = std::max(size_t(4), _capacity / 2);
+        resize(new_capacity);
     }
 
 public:
-    // constructor
-    DynamicArray() : size(0), capacity(4), array(new T[4]) {}
+    // default constructor
+    DynamicArray() {
+        _capacity = 1;
+        _size = 0;
+        _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
+    }
+
+    // default constructor capacity override
+    DynamicArray(size_t capacity) {
+        // deep questions, should 0 capacity be allowed?
+        if (capacity == 0) {
+            throw std::invalid_argument("capacity must > 0!");
+        }
+
+        _capacity = capacity;
+        _size = 0;
+        
+        // accquire memory (no construction)
+        _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
+    }
+
+    // default constructor capacity, default override
+    DynamicArray(size_t capacity, const T& x) {
+        static_assert(std::is_copy_constructible_v<T>, "type is not copyable!");
+
+        if (capacity == 0) {
+            throw std::invalid_argument("capacity must > 0!");
+        }
+
+        _capacity = capacity;
+        _size = capacity;
+
+        // accquire memory
+        _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
+        // now construct
+        size_t i = 0;
+        try {
+            for (; i < _capacity; i++) {
+                new (_array + i) T(x); // assumes T has a copy constructor
+            }
+        }
+        catch (...) {
+            for (; i > 0; i--) {
+                _array[i - 1].~T();
+            }
+            ::operator delete(_array, std::align_val_t(alignof(T)));
+            throw;
+        }
+    }
 
     // Destructor
     ~DynamicArray() {
-        delete[] array;
+        delete[] _array;
     }
 
     // copy constructor
     DynamicArray(const DynamicArray& other) {
-        size = other.size;
-        capacity = other.capacity;
+        _size = other._size;
+        _capacity = other._capacity;
 
-        array = new T[capacity];
-        std::copy(other.array, other.array + size, array);
+        _array = new T[_capacity];
+        std::copy(other._array, other._array + _size, _array);
     }
 
     // assignment operator
     DynamicArray& operator=(const DynamicArray& other) {
         if (this != &other) {
-            T* newArray = new T[other.capacity];
-            std::copy(other.array, other.array + size, newArray);
+            T* newArray = new T[other._capacity];
+            std::copy(other._array, other._array + _size, newArray);
 
-            delete[] array;
+            delete[] _array;
 
-            size = other.size;
-            capacity = other.capacity;
-            array = newArray;
+            _size = other._size;
+            _capacity = other._capacity;
+            _array = newArray;
         }
 
         return *this;
@@ -106,27 +145,27 @@ public:
 
     // move constructor
     DynamicArray(DynamicArray&& other) noexcept {
-        size = other.size;
-        capacity = other.capacity;
-        array = other.array;
+        _size = other._size;
+        _capacity = other._capacity;
+        _array = other._array;
 
-        other.array = nullptr;
-        other.capacity = 0;
-        other.size = 0;
+        other._array = nullptr;
+        other._capacity = 0;
+        other._size = 0;
     }
 
     // move assignment
     DynamicArray& operator=(DynamicArray&& other) noexcept {
         if (this != &other) {
-            delete[] array;
+            delete[] _array;
 
-            size = other.size;
-            capacity = other.capacity;
-            array = other.array;
+            _size = other._size;
+            _capacity = other._capacity;
+            _array = other._array;
 
-            other.size = 0;
-            other.capacity = 0;
-            other.array = nullptr;
+            other._size = 0;
+            other._capacity = 0;
+            other._array = nullptr;
         }
 
         return *this;
@@ -134,108 +173,13 @@ public:
 
     // push by const lvalue
     void push(const T& x) {
-        if (size == capacity) grow();
-        array[size++] = x;
+        if (_size == _capacity) grow();
+        _array[_size++] = x;
     }
 
     // push by rvalue binding
     void push(T&& x) {
-        if (size == capacity) grow();
-        array[size++] = std::move(x);
-    }
-
-    // pop last element
-    T pop() {
-        if (size == 0) throw std::runtime_error("Array is empty!");
-
-        T ret_val = std::move(array[size - 1]);
-        size--;
-
-        if (capacity > 4 && size <= capacity / 4) shrink();
-        return ret_val;
-    }
-
-    // pop by index
-    T pop(size_t idx) {
-        if (size == 0) throw std::runtime_error("Array is empty!");
-        if (idx >= size) throw std::out_of_range("Index out of range!");
-
-        T ret_val = std::move(array[idx]);
-        size--;
-
-        for (size_t i = idx; i < size; i++) {
-            array[i] = std::move(array[i + 1]);
-        }
-
-        if (capacity > 4 && size <= capacity / 4) shrink();
-        return ret_val;
-    }
-
-    // insert at index using const lvalue reference
-    void insert(const T& x, size_t idx) {
-        if (idx > size) throw std::out_of_range("Index out of range!");
-        if (size == capacity) grow();
-
-        for (size_t i = size; i > idx; i--) {
-            array[i] = std::move(array[i - 1]);
-        }
-
-        array[idx] = x;
-        size++;
-    }
-
-    // insert at index using rvalue binding
-    void insert(T&& x, size_t idx) {
-        if (idx > size) throw std::out_of_range("Index out of range!");
-        if (size == capacity) grow();
-
-        for (size_t i = size; i > idx; i--) {
-            array[i] = std::move(array[i - 1]);
-        }
-
-        array[idx] = std::move(x);
-        size++;
-    }
-
-    // get array length
-    size_t length() const {
-        return size;
-    }
-
-    // is array empty
-    bool empty() const {
-        return size == 0;
-    }
-
-    // access element by index
-    T& operator[](size_t idx) {
-        if (idx >= size) throw std::out_of_range("Index out of range!");
-        return array[idx];
-    }
-
-    // access element by index (const)
-    const T& operator[](size_t idx) const {
-        if (idx >= size) throw std::out_of_range("Index out of range!");
-        return array[idx];
-    }
-
-    // begin pointer
-    T* begin() {
-        return array;
-    }
-
-    // end pointer
-    T* end() {
-        return array + size;
-    }
-
-    // const begin pointer
-    const T* begin() const {
-        return array;
-    }
-
-    // const end pointer
-    const T* end() const {
-        return array + size;
+        if (_size == _capacity) grow();
+        _array[_size++] = std::move(x);
     }
 };

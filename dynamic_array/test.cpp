@@ -1,58 +1,37 @@
-#include <iostream>
-#include "dynamic_array.h";
-#include <string>
-using namespace std;
+#include <benchmark/benchmark.h>
+#include "dynamic_array.h"
+#include <vector>
+
+struct S { 
+    int data[16];
+    std::string name;
+};
+
+static void BM_Test_vector_push_back(benchmark::State& state) {
+    for (auto _ : state) {
+        std::vector<S> arr;
+        for (int i = 0; i < 10; i++) arr.push_back(S({12, 12, 12}, "Anshu"));
+    }
+}
+
+static void BM_Test_dynamic_array_push(benchmark::State& state) {
+    for (auto _ : state) {
+        DynamicArray<S> arr;
+        for (int i = 0; i < 10; i++) arr.push(S({ 12, 12, 12 }, "Anshu"));
+    }
+}
+
+//BENCHMARK(BM_Test_vector_push_back)->Range(1 << 10, 1 << 20);
+//BENCHMARK(BM_Test_dynamic_array_push)->Range(1 << 10, 1 << 20);
+//
+//BENCHMARK_MAIN();
 
 int main() {
-	DynamicArray<string> arr;
-
-	arr.push("J Cole");
-	arr.push("Kendrick Lamar");
-	arr.push("Future");
-	arr.push("JID");
-
-	for (auto x : arr) {
-		cout << x << ' ';
-	}
-
-	cout << endl;
-
-	arr.insert("21 Savage", 2);	
-	try {
-		arr.insert("Drake", 10);
-	}
-	catch (...) {
-		cout << "We erred" << '\n';
-	}
-
-	for (auto x : arr) {
-		cout << x << ' ';
-	}
-	cout << endl;
-
-	arr.pop();
-	arr.pop();
-	arr.pop();
-
-	for (auto x : arr) {
-		cout << x << ' ';
-	}
-	cout << endl;
-
-	DynamicArray<string> arr2(arr);
-	arr2.push("Baby Keem");
-	for (auto x : arr2) {
-		cout << x << ' ';
-	}
-	cout << endl;
-	for (auto x : arr) {
-		cout << x << ' ';
-	}
-	cout << endl;
-
-	arr = move(arr2);
-	for (auto x : arr) {
-		cout << x << ' ';
-	}
-	cout << endl;
+    DynamicArray<S> arr;
+    arr.push(S({12,12,12}, "Anshu"));
+    arr.push(S({12,12,12}, "Anshu"));
+    arr.push(S({12,12,12 }, "Anshu"));
+    arr.push(S({12,12,12 }, "Anshu"));
+    arr.push(S({ 12,12,12 }, "Anshu"));
+    return 0;
 }
