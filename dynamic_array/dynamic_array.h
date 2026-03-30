@@ -62,9 +62,20 @@ private:
         resize(new_capacity);
     }
 
+    // destruct and deallocate memory
+    static void deallocate(T* arr, size_t i) {
+        if (!arr) return;
+
+        for (; i > 0; i--) {
+            arr[i - 1].~T();
+        }
+
+        ::operator delete(arr, std::align_val_t(alignof(T)));
+    }
+
 public:
     // default constructor
-    DynamicArray() noexcept = default;
+    DynamicArray() noexcept = default; // won't throw ever
 
     // default constructor
     explicit DynamicArray(size_t capacity) {
@@ -94,7 +105,7 @@ public:
         }
 
         // accquire memory
-        _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
+        _array = static_cast<T*>(::operator new(capacity * sizeof(T), std::align_val_t(alignof(T))));
         // now construct
         size_t i = 0;
         try {
@@ -107,25 +118,14 @@ public:
             _size = capacity;
         }
         catch (...) {
-            for (; i > 0; i--) {
-                _array[i - 1].~T();
-            }
-            ::operator delete(_array, std::align_val_t(alignof(T)));
+            deallocate(_array, i);
             throw;
         }
     }
 
     // destructor
     ~DynamicArray() {
-        size_t i = 0;
-
-        // destruct
-        for (; i < _size; i++) {
-            _array[i].~T();
-        }
-
-        // free memory
-        ::operator delete(_array, std::align_val_t(alignof(T)));
+        deallocate(_array, _size);
     }
 
     // copy constructor
@@ -147,11 +147,7 @@ public:
             _capacity = other._capacity;
         }
         catch (...) {
-            for (; i > 0; i--) {
-                _array[i - 1].~T();
-            }
-
-            ::operator delete(_array, std::align_val_t(alignof(T)));
+            deallocate(_array, i);
             throw;
         }
     }
@@ -167,14 +163,7 @@ public:
                     new (new_array + i) T(other._array[i]);
                 }
 
-
-                // destruct
-                for (size_t j = 0; j < _size; j++) {
-                    _array[j].~T();
-                }
-
-                // deallocate
-                ::operator delete(_array, std::align_val_t(alignof(T)));
+                deallocate(_array, _size);
 
                 // safe now
                 _size = other._size;
@@ -182,11 +171,7 @@ public:
                 _array = new_array;
             }
             catch (...) {
-                for (; i > 0; i--) {
-                    new_array[i - 1].~T();
-                }
-
-                ::operator delete(new_array, std::align_val_t(alignof(T)));
+                deallocate(new_array, i);
                 throw;
             }
         }
@@ -208,13 +193,7 @@ public:
     // move assignment
     DynamicArray& operator=(DynamicArray&& other) noexcept {
         if (this != &other) {
-            // destruct
-            for (size_t i = 0; i < _size; i++) {
-                _array[i].~T();
-            }
-
-            // deallocate
-            ::operator delete(_array, std::align_val_t(alignof(T)));
+            deallocate(_array, _size);
 
             _size = other._size;
             _capacity = other._capacity;
