@@ -13,11 +13,7 @@ private:
 
     // function to resize array
     void resize(size_t new_capacity) {
-        // new T() => allocate memory + manage lifetime
-        // ::operator new => only allocate memory
-        // new loc T() => gice allocated memory loc, construct object there
-
-        T* new_array = static_cast<T*>(::operator new[](new_capacity * sizeof(T))); // get raw memory
+        T* new_array = static_cast<T*>(::operator new(new_capacity * sizeof(T), std::align_val_t(alignof(T))));
 
         size_t i = 0;
         try {
@@ -28,37 +24,30 @@ private:
             }
             else {
                 for (; i < _size; i++) {
-                    new (new_array + i) T(_array[i]);
+                    new (new_array + i) T(_array[i]); // invoke copy constructor
                 }
             }
         }
         catch (...) {
             // rollback in case of failure
-            for (; i > 0; i--) {
-                new_array[i-1].~T(); // call destructor manually for placement new constructed memory
-            }
-            ::operator delete[](static_cast<void*>(new_array));
+            deallocate(new_array, i);
             throw;
         }
 
-        for (size_t j = 0; j < _size; j++) {
-            _array[j].~T();
-        }
-
-        ::operator delete[](static_cast<void*>(_array));
+        deallocate(_array, _size);
         _capacity = new_capacity;
         _array = new_array;
     }
 
     // double array size
     void grow() {
-        size_t new_capacity = std::max(size_t(4), _capacity * 2);
+        size_t new_capacity = (_capacity == 0) ? 1 : _capacity * 2;
         resize(new_capacity);
     }
 
     // half array size
     void shrink() {
-        size_t new_capacity = std::max(size_t(4), _capacity / 2);
+        size_t new_capacity = std::max(_size, _capacity / 2);
         resize(new_capacity);
     }
 
@@ -124,7 +113,7 @@ public:
     }
 
     // destructor
-    ~DynamicArray() {
+    ~DynamicArray() noexcept { // if ~T throws, not my problem
         deallocate(_array, _size);
     }
 
@@ -207,15 +196,111 @@ public:
         return *this;
     }
 
-    // push by const lvalue
+    // push by const lvalue reference
     void push(const T& x) {
         if (_size == _capacity) grow();
-        _array[_size++] = x;
+        new (_array + _size) T(x);
+        _size++;
     }
 
     // push by rvalue binding
     void push(T&& x) {
         if (_size == _capacity) grow();
-        _array[_size++] = std::move(x);
+        new (_array + _size) T(std::move(x));
+        _size++;
     }
+
+    template <typename U>
+    void insert(size_t idx, U&& x) {
+        if (idx > _size) throw std::out_of_range("index out of range!");
+        if (_size == _capacity) grow();
+
+        // insertion at end
+        if (idx == _size) {
+            new (_array + _size) T(std::forward<U>(x));
+            _size++;
+            return;
+        }
+
+        // if we can move, shift in-place
+        if constexpr (std::is_nothrow_move_constructible_v<T> &&
+            std::is_nothrow_move_assignable_v<T>) {
+            // may throw but container remains intact
+            T temp(std::forward<U>(x));
+
+            // move last element into uninitialised slot
+            new (_array + _size) T(std::move(_array[_size - 1]));
+
+            for (size_t i = _size - 1; i > idx; --i) {
+                _array[i] = std::move(_array[i - 1]);
+            }
+
+            // place the new value
+            _array[idx] = std::move(temp);
+
+            ++_size;
+        }
+        else {
+            // If moves can throw, allocate a new buffer to maintain the strong exception guarantee.
+            // acquire new memory
+            T* new_array = static_cast<T*>(::operator new((_size + 1) * sizeof(T), std::align_val_t(alignof(T))));
+            size_t i = 0;
+
+            try {
+                // before idx
+                for (; i < idx; ++i) {
+                    new (new_array + i) T(std::move_if_noexcept(_array[i]));
+                }
+
+                // inserted element
+                new (new_array + idx) T(std::forward<U>(x));
+                ++i;
+
+                // after idx
+                for (size_t j = idx; j < _size; ++j, ++i) {
+                    new (new_array + i) T(std::move_if_noexcept(_array[j]));
+                }
+            }
+            catch (...) {
+                deallocate(new_array, i);
+                throw;
+            }
+
+            // commit
+            deallocate(_array, _size);
+            _array = new_array;
+            _size++;
+        }
+    }
+
+    // pop element from the end of the container
+    T pop() {
+        if (_size == 0) throw std::runtime_error("array is empty!");
+
+        _size--;
+        T ret_val = std::move(_array[_size]);
+        _array[_size].~T();
+        if (_size < _capacity / 4) shrink();
+        return ret_val;
+    }
+
+    // remove element by index
+    void remove(size_t idx) {
+        if (idx >= _size) throw std::invalid_argument("index out of range!");
+
+        for (size_t i = idx + 1; i < _size; i++) {
+            _array[i - 1] = std::move(_array[i]);
+        }
+
+        _size--;
+        _array[_size].~T();
+    }
+
+    // indexing access
+    T& operator[](size_t idx) { return _array[idx]; }
+    const T& operator[](size_t idx) const { return _array[idx]; }
+
+    // size & capacity getter
+    size_t size() const noexcept { return _size; }
+    size_t capacity() const noexcept { return _capacity; }
 };
