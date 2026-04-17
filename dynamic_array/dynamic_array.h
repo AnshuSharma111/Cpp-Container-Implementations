@@ -13,28 +13,33 @@ private:
 
     // function to resize array
     void resize(size_t new_capacity) {
-        T* new_array = static_cast<T*>(::operator new(new_capacity * sizeof(T), std::align_val_t(alignof(T))));
+        T* new_array = allocate(new_capacity);
 
         size_t i = 0;
+        size_t limit = std::min(_size, new_capacity);
+
         try {
+            // if type is move construtible OR move-only, move
             if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-                for (; i < _size; i++) {
-                    new (new_array + i) T(std::move(_array[i])); // placement new to construct object
+                for (; i < limit; i++) {
+                    new (new_array + i) T(std::move(_array[i]));
                 }
             }
             else {
-                for (; i < _size; i++) {
+                for (; i < limit; i++) {
                     new (new_array + i) T(_array[i]); // invoke copy constructor
                 }
             }
         }
         catch (...) {
             // rollback in case of failure
-            deallocate(new_array, i);
+            destruct(new_array, i);
+            deallocate(new_array);
             throw;
         }
 
-        deallocate(_array, _size);
+        destruct(_array, _size);
+        deallocate(_array);
         _capacity = new_capacity;
         _array = new_array;
     }
@@ -44,27 +49,37 @@ private:
         size_t new_capacity = (_capacity == 0) ? 1 : _capacity * 2;
         resize(new_capacity);
     }
-
-    // half array size
-    void shrink() {
-        size_t new_capacity = std::max(_size, _capacity / 2);
-        resize(new_capacity);
+    
+    // allocate raw memory
+    static T* allocate(size_t sz) {
+        if (sz == 0) return nullptr;
+        T* new_array = static_cast<T*>(::operator new(sz * sizeof(T), std::align_val_t(alignof(T))));
+        return new_array;
     }
-
-    // destruct and deallocate memory
-    static void deallocate(T* arr, size_t i) {
+    
+    // destruct objects at memory
+    static void destruct(T* arr, size_t i) {
         if (!arr) return;
 
         for (; i > 0; i--) {
             arr[i - 1].~T();
         }
+    }
 
+    // deallocate memory
+    static void deallocate(T* arr) {
+        if (arr == nullptr) return;
         ::operator delete(arr, std::align_val_t(alignof(T)));
     }
 
 public:
+    // Design Note: not designed to handle throwing destructors
+    static_assert(std::is_nothrow_destructible_v<T>, "type is not nothrow destructible");
+    // Design Note : T must be copy constructible otherwise copy constructor and assignment don't work
+    static_assert(std::is_copy_constructible_v<T>, "type is not copy constructible!");
+
     // default constructor
-    DynamicArray() noexcept = default; // won't throw ever
+    DynamicArray() noexcept = default;
 
     // default constructor
     explicit DynamicArray(size_t capacity) {
@@ -77,15 +92,13 @@ public:
 
         _capacity = capacity;
         _size = 0;
-        
+
         // accquire memory (no construction)
-        _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
+        _array = allocate(_capacity);
     }
 
-    // default constructor
-    DynamicArray(size_t capacity, const T& x) {
-        static_assert(std::is_copy_constructible_v<T>, "type is not copy constructible!");
-
+    // fill constructor
+    DynamicArray(size_t capacity, const T& x) { // const T& binds to both l and r values
         if (capacity == 0) {
             _array = nullptr;
             _size = 0;
@@ -94,12 +107,13 @@ public:
         }
 
         // accquire memory
-        _array = static_cast<T*>(::operator new(capacity * sizeof(T), std::align_val_t(alignof(T))));
+        _array = allocate(capacity);
+
         // now construct
         size_t i = 0;
         try {
             for (; i < capacity; i++) {
-                new (_array + i) T(x); // assumes T has a copy constructor
+                new (_array + i) T(x);
             }
 
             // safely constructed, update parameters
@@ -107,52 +121,60 @@ public:
             _size = capacity;
         }
         catch (...) {
-            deallocate(_array, i);
+            destruct(_array, i);
+            deallocate(_array);
             throw;
         }
     }
 
     // destructor
-    ~DynamicArray() noexcept { // if ~T throws, not my problem
-        deallocate(_array, _size);
+    ~DynamicArray() noexcept {
+        // Design Note : Guaranteed to not throw because of assertion T is nothrow destructible
+        destruct(_array, _size);
+        deallocate(_array);
     }
 
     // copy constructor
-    DynamicArray(const DynamicArray& other) {
-        static_assert(std::is_copy_constructible_v<T>, "type is not copy constructible!");
-
+    DynamicArray(const DynamicArray& other) 
+        : _array(nullptr), _size(0), _capacity(0)
+    {
         // accquire memory
-        _array = static_cast<T*>(::operator new(other._capacity * sizeof(T), std::align_val_t(alignof(T))));
+        _array = allocate(other._capacity);
+        _capacity = other._capacity;
 
         // try constructing objects
         size_t i = 0;
         try {
             for (; i < other._size; i++) {
-                new (_array + i) T(other._array[i]); // T must be copy constructable
+                // Scenario : copy constructor throws, the catch block exceutes and undoes progress.
+                new (_array + i) T(other._array[i]);
             }
 
             // safely copied
             _size = other._size;
-            _capacity = other._capacity;
         }
         catch (...) {
-            deallocate(_array, i);
+            destruct(_array, i);
+            deallocate(_array);
             throw;
         }
     }
 
     // assignment operator
     DynamicArray& operator=(const DynamicArray& other) {
+        // A = B (copy B into A)
         if (this != &other) {
-            T* new_array = static_cast<T*>(::operator new(other._capacity * sizeof(T), std::align_val_t(alignof(T))));
-            
+            T* new_array = allocate(other._capacity);
+
             size_t i = 0;
             try {
                 for (; i < other._size; i++) {
+                    // Scenario : copy constructor fails, catch block undoes progress.
                     new (new_array + i) T(other._array[i]);
                 }
 
-                deallocate(_array, _size);
+                destruct(_array, _size);
+                deallocate(_array);
 
                 // safe now
                 _size = other._size;
@@ -160,7 +182,8 @@ public:
                 _array = new_array;
             }
             catch (...) {
-                deallocate(new_array, i);
+                destruct(new_array, i);
+                deallocate(new_array);
                 throw;
             }
         }
