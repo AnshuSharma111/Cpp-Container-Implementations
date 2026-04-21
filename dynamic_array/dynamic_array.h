@@ -233,67 +233,12 @@ public:
         _size++;
     }
 
+    // forwarding reference insert
     template <typename U>
     void insert(size_t idx, U&& x) {
         if (idx > _size) throw std::out_of_range("index out of range!");
-        if (_size == _capacity) grow();
-
-        // insertion at end
-        if (idx == _size) {
-            new (_array + _size) T(std::forward<U>(x));
-            _size++;
-            return;
-        }
-
-        // if we can move, shift in-place
-        if constexpr (std::is_nothrow_move_constructible_v<T> &&
-            std::is_nothrow_move_assignable_v<T>) {
-            // may throw but container remains intact
-            T temp(std::forward<U>(x));
-
-            // move last element into uninitialised slot
-            new (_array + _size) T(std::move(_array[_size - 1]));
-
-            for (size_t i = _size - 1; i > idx; --i) {
-                _array[i] = std::move(_array[i - 1]);
-            }
-
-            // place the new value
-            _array[idx] = std::move(temp);
-
-            ++_size;
-        }
-        else {
-            // If moves can throw, allocate a new buffer to maintain the strong exception guarantee.
-            // acquire new memory
-            T* new_array = static_cast<T*>(::operator new((_size + 1) * sizeof(T), std::align_val_t(alignof(T))));
-            size_t i = 0;
-
-            try {
-                // before idx
-                for (; i < idx; ++i) {
-                    new (new_array + i) T(std::move_if_noexcept(_array[i]));
-                }
-
-                // inserted element
-                new (new_array + idx) T(std::forward<U>(x));
-                ++i;
-
-                // after idx
-                for (size_t j = idx; j < _size; ++j, ++i) {
-                    new (new_array + i) T(std::move_if_noexcept(_array[j]));
-                }
-            }
-            catch (...) {
-                deallocate(new_array, i);
-                throw;
-            }
-
-            // commit
-            deallocate(_array, _size);
-            _array = new_array;
-            _size++;
-        }
+        // STRATEGY: If container needs to be resized, we can ensure strong exception safety guarantee
+        // otherwise we try to shift elements and the exception safety guarantee degrades to basic
     }
 
     // pop element from the end of the container
@@ -303,7 +248,6 @@ public:
         _size--;
         T ret_val = std::move(_array[_size]);
         _array[_size].~T();
-        if (_size < _capacity / 4) shrink();
         return ret_val;
     }
 
