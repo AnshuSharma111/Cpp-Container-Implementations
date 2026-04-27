@@ -205,7 +205,8 @@ public:
     // move assignment
     DynamicArray& operator=(DynamicArray&& other) noexcept {
         if (this != &other) {
-            deallocate(_array, _size);
+            destruct(_array, _size);
+            deallocate(_array);
 
             _size = other._size;
             _capacity = other._capacity;
@@ -238,7 +239,68 @@ public:
     void insert(size_t idx, U&& x) {
         if (idx > _size) throw std::out_of_range("index out of range!");
         // STRATEGY: If container needs to be resized, we can ensure strong exception safety guarantee
+
+        if (_size == _capacity) {
+            size_t new_capacity = (_capacity == 0) ? 1 : _capacity * 2;
+            T* new_array = allocate(new_capacity);
+            size_t i = 0, j = 0;
+
+            // prevent aliasing issue
+            T temp(std::forward<U>(x));
+
+            try {
+                // before idx
+                for (; i < idx; i++, j++) {
+                    new (new_array + i) T(std::move_if_noexcept(_array[j]));
+                }
+
+                // at idx
+                new (new_array + idx) T(std::move(temp));
+                i++;
+
+                // after idx
+                for (; j < _size; ++i, ++j) {
+                    new (new_array + i) T(std::move_if_noexcept(_array[j]));
+                }
+            } catch (...) {
+                // alright, something went wrong. Pack it up
+                destruct(new_array, i);
+                deallocate(new_array);
+                throw;
+            }
+
+            // we can commit now
+            destruct(_array, _size);
+            deallocate(_array);
+
+            _array = new_array;
+            _capacity = new_capacity;
+            _size++;
+        } 
         // otherwise we try to shift elements and the exception safety guarantee degrades to basic
+        else {
+            // prevent aliasing issues
+            T temp(std::forward<U>(x));
+
+            // if _size == 0, we access array[size - 1] which is UB
+            if (_size == 0) {
+                new (_array) T(std::move(temp));
+                _size++;
+                return;
+            }
+
+            // construct at _size
+            new (_array + _size) T(std::move(_array[_size - 1]));
+
+            // shift backward
+            for (size_t i = _size - 1; i > idx; --i) {
+                _array[i] = std::move(_array[i - 1]);
+            }
+
+            // assign into idx
+            _array[idx] = std::move(temp);
+            _size++;
+        }
     }
 
     // pop element from the end of the container
@@ -253,7 +315,7 @@ public:
 
     // remove element by index
     void remove(size_t idx) {
-        if (idx >= _size) throw std::invalid_argument("index out of range!");
+        if (idx >= _size) throw std::out_of_range("index out of range!");
 
         for (size_t i = idx + 1; i < _size; i++) {
             _array[i - 1] = std::move(_array[i]);

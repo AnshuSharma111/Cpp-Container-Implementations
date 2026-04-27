@@ -49,4 +49,3 @@ These are enforced as static assertions that disallow container creation if thes
 
 - For move-only types, moves are expected to be ```noexcept``` as a convention
 - Similarly, for copy-only types, copying is expected to be ```noexcept```
-
