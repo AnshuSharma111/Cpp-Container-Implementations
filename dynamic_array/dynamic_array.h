@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <stdexcept>
 #include <type_traits>
+#include <concepts>
+#include <utility>
 
 template <typename T>
 class DynamicArray {
@@ -58,6 +60,7 @@ private:
     }
     
     // destruct objects at memory
+    // destructs objects in the index range [0, i)
     static void destruct(T* arr, size_t i) {
         if (!arr) return;
 
@@ -73,10 +76,18 @@ private:
     }
 
 public:
-    // Design Note: not designed to handle throwing destructors
-    static_assert(std::is_nothrow_destructible_v<T>, "type is not nothrow destructible");
-    // Design Note : T must be copy constructible otherwise copy constructor and assignment don't work
-    static_assert(std::is_copy_constructible_v<T>, "type is not copy constructible!");
+    // Design Note 1 : The container NEEDS to have a destructor
+    // That is the conntract but it's nice to be explicit
+    static_assert(std::is_destructible_v<T>, "Type needs to be destructible!"); 
+
+    // Design Note 2 : I allow types with destructors not marked as nothrow
+    // But the contract of the container is that the destructor is nothrow. Therefore, I do not guard against a throwing destructor
+    // as that is a violation of that contract
+
+    // Design Note 3 : I allow T to not be copy constructible as long as the user does not call copy constructing methods such as
+    // copy constructor or assignment. This is for the sake of move-only types like unique_ptr
+    // same with copy-only types
+
 
     // default constructor
     DynamicArray() noexcept = default;
@@ -220,50 +231,66 @@ public:
         return *this;
     }
 
-    // push by const lvalue reference
-    void push(const T& x) {
-        if (_size == _capacity) grow();
-        new (_array + _size) T(x);
-        _size++;
-    }
+    // forwarding reference push back
+    template <typename U>
+    requires std::constructible_from<T, U&&>
+    void push_back(U&& x) {
+        if (_size == _capacity) {
+            // reallocation invalidates previous references therefore anti-aliasing first
+            T temp(std::forward<U>(x));
+            grow();
+            new (_array + _size) T(std::move(temp));
+        } else {
+            new (_array + _size) T(std::forward<U>(x));
+        }
 
-    // push by rvalue binding
-    void push(T&& x) {
-        if (_size == _capacity) grow();
-        new (_array + _size) T(std::move(x));
         _size++;
     }
 
     // forwarding reference insert
     template <typename U>
+    // The function accepts anything
+    // as long as it is constructible into T
+    // therefore the constraint
+    requires std::constructible_from<T, U&&> && std::is_move_assignable_v<T>
     void insert(size_t idx, U&& x) {
         if (idx > _size) throw std::out_of_range("index out of range!");
         // STRATEGY: If container needs to be resized, we can ensure strong exception safety guarantee
-
         if (_size == _capacity) {
             size_t new_capacity = (_capacity == 0) ? 1 : _capacity * 2;
             T* new_array = allocate(new_capacity);
             size_t i = 0, j = 0;
 
-            // prevent aliasing issue
-            T temp(std::forward<U>(x));
-
+            
             try {
+                // prevent aliasing issue
+                // throw spot 1 : construction of temp fails
+                // what happens on failure ? catch block deallocates and destructs new_array, no harm
+                T temp(std::forward<U>(x));
+
                 // before idx
                 for (; i < idx; i++, j++) {
+                    // throw spot 2
+                    // A. Move is not noexcept therefore copy is called and copying fails
+                    // B. Construction of T fails
+                    // In either case, we have placed i - 1 elements and would like to destroy all of them and deallocate new_array. That is done by the catch block
                     new (new_array + i) T(std::move_if_noexcept(_array[j]));
                 }
 
                 // at idx
+                // throw spot 3
+                // Construction of T fails
+                // we need to destruct all i - 1 elements constructed
+                // that is done by the catch block
                 new (new_array + idx) T(std::move(temp));
                 i++;
 
                 // after idx
+                // same as throw spot 2
                 for (; j < _size; ++i, ++j) {
                     new (new_array + i) T(std::move_if_noexcept(_array[j]));
                 }
             } catch (...) {
-                // alright, something went wrong. Pack it up
                 destruct(new_array, i);
                 deallocate(new_array);
                 throw;
@@ -279,25 +306,62 @@ public:
         } 
         // otherwise we try to shift elements and the exception safety guarantee degrades to basic
         else {
+            // NOTE: This part is not up to the mark because reallocation path uses move construction 
+            // but this branch uses move assignment which is strictly worse
+            // so if a user tries to initialise for a type where move throws, then code will not compiler
+            // this differs from std::vector, where the code will compile but will throw at runtime
+
             // prevent aliasing issues
             T temp(std::forward<U>(x));
 
             // if _size == 0, we access array[size - 1] which is UB
+            // so just call push_back then
             if (_size == 0) {
-                new (_array) T(std::move(temp));
-                _size++;
+                push_back(std::move(temp));
                 return;
             }
 
             // construct at _size
-            new (_array + _size) T(std::move(_array[_size - 1]));
+            // throw spot 4
+            // construction of T fails
+            // no problem, we haven't modified _array yet
+            new (_array + _size) T(std::move_if_noexcept(_array[_size - 1]));
 
-            // shift backward
-            for (size_t i = _size - 1; i > idx; --i) {
-                _array[i] = std::move(_array[i - 1]);
+            size_t num_modified = 1; // we already constructed one at _size
+            size_t failure_index = _size - 1; // start with largest possible value
+
+            try {
+                // throw spot 5
+                // A. construction of T fails
+                // B. placement new fails
+                // If we fail here, we destruct all constructed elements so far
+                // Having a consistent unspecified state is better than leaving the container half constructed or built
+                // so that we can avoid double destruction or construction in the future
+                for (size_t i = _size - 1; i > idx; --i) {
+                    // in case we fail, truncate the container upto the failed index
+                    failure_index = i;
+
+                    _array[i] = std::move(_array[i - 1]);
+                    num_modified++;
+                }
+            }
+            catch (...) {
+                // destroy all elements from the first element in unspecified state (_array[i - 1])
+                // to the end to remove the tainted tail
+                for (size_t k = 0; k < num_modified; ++k) {
+                    _array[_size - k].~T();
+                }
+
+                // update size
+                _size = failure_index;
+
+                // now we have discarded all elements from i - 1 to _size
+                throw;
             }
 
             // assign into idx
+            // throw spot 6
+            // same as spot 4
             _array[idx] = std::move(temp);
             _size++;
         }
