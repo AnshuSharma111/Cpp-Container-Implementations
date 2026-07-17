@@ -5,6 +5,7 @@
 #include <type_traits>
 #include <concepts>
 #include <utility>
+#include <cstddef>
 
 template <typename T>
 class DynamicArray {
@@ -13,11 +14,15 @@ private:
     size_t _capacity = 0;
     T* _array = nullptr;
 
-    // function to resize array
-    void resize(size_t new_capacity) {
+    // function to reserve new_capacity space
+    // NOTE: only allocates memory anc copy old elements into the new memory, does not construct in it 
+    void reserve(size_t new_capacity) {
         T* new_array = allocate(new_capacity);
 
         size_t i = 0;
+
+        // new_capacity can be smaller than the number of elements we had in the array
+        // in that case, inly copy the first _size - 1 elements
         size_t limit = std::min(_size, new_capacity);
 
         try {
@@ -49,7 +54,7 @@ private:
     // double array size
     void grow() {
         size_t new_capacity = (_capacity == 0) ? 1 : _capacity * 2;
-        resize(new_capacity);
+        reserve(new_capacity);
     }
     
     // allocate raw memory
@@ -58,7 +63,7 @@ private:
         T* new_array = static_cast<T*>(::operator new(sz * sizeof(T), std::align_val_t(alignof(T))));
         return new_array;
     }
-    
+
     // destruct objects at memory
     // destructs objects in the index range [0, i)
     static void destruct(T* arr, size_t i) {
@@ -69,10 +74,44 @@ private:
         }
     }
 
+    // destruct objects at memory
+    // destructs objects in the index range [0, i)
+    // void destruct(size_t i) {
+    //     if (!_array) return;
+
+    //     for (; i > 0; i--) {
+    //         _array[i - 1].~T();
+    //     }
+    // }
+
     // deallocate memory
     static void deallocate(T* arr) {
         if (arr == nullptr) return;
         ::operator delete(arr, std::align_val_t(alignof(T)));
+    }
+
+    // assign default objects to container memory
+    // constructs objects in the index range [0, i)
+    static void default_construct(T* arr, size_t i) {
+        if (!arr) return;
+
+        size_t cur = i - 1;
+
+        try {
+            for (; cur >= 0; cur--) {
+                ::new (static_cast<void*>(arr + cur)) T();
+            }
+
+            _size = i;
+        } catch (...) {
+            // we failed at index cur therefore cur has not been constructed to, therefore destruct from (i, cur)
+            i--;
+            for (; i > cur; i--) {
+                arr[i].~T();
+            }
+
+            throw;
+        }
     }
 
 public:
@@ -368,7 +407,7 @@ public:
     }
 
     // pop element from the end of the container
-    T pop() {
+    T pop_back() {
         if (_size == 0) throw std::runtime_error("array is empty!");
 
         _size--;
@@ -389,11 +428,58 @@ public:
         _array[_size].~T();
     }
 
-    // indexing access
-    T& operator[](size_t idx) { return _array[idx]; }
-    const T& operator[](size_t idx) const { return _array[idx]; }
+    // resize container
+    // behavior: if resize to less than _size, destruct elements forward and adjust _size
+    //           if resize to more than _size, initialise empty slots with new elements
+    //           if resize to more _capacity, then increase container size
+    void resize (size_t sz) {
+        if (sz < _size) {
+            // _size is the last non-constructed index, therefore we need to destruct [sz, _size)
+            // case 1 : sz = _size - 1 => _size - sz = 1; 1 element destructed, which is intended behavior
+            // case 2 : sz = 0 => _size - sz = _size; empty the array, intended behavior
+            destruct(_array + sz, _size - sz);
+            _size = sz;
+        } else {
+            if (sz > _capacity) {
+                // allocate new buffer of sz and relocate _arr into it
+                reserve(sz);
+            }
 
+            // construct in [_size, sz)
+            default_construct(_array + _size, sz - _size);
+        }
+    }
+
+    // clear function to empty the container
+    void clear () noexcept {
+        destruct(_array, _size);
+        _size = 0;   
+    }
+
+    // indexing access
+    T& operator[](size_t idx) {
+        if (idx >= _size)
+            throw std::out_of_range("index out of range");
+        return _array[idx];
+    }
+
+    const T& operator[](size_t idx) const {
+        if (idx >= _size)
+            throw std::out_of_range("index out of range");
+        return _array[idx];
+    }
     // size & capacity getter
     size_t size() const noexcept { return _size; }
     size_t capacity() const noexcept { return _capacity; }
+
+    // iterator support
+    const T* begin() const { return _array; }
+    const T* end() const { return _array + _size ; }
+
+    // the first and the last element
+    // NOTE : calling on empty container is undefined behavior
+    const T& front() const { return *_array; }
+    const T& back() const { return *(_array + _size - 1); }
+
+    bool empty() { return _size == 0; }
 };
