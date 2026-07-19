@@ -14,19 +14,19 @@ private:
     size_t _capacity = 0;
     T* _array = nullptr;
 
-    // function to reserve new_capacity space
-    // NOTE: only allocates memory anc copy old elements into the new memory, does not construct in it 
-    void reserve(size_t new_capacity) {
+    // helper function to re-allocate container into new space
+    // NOTE: only allocates memory and copies old elements into the new memory, does not construct in it 
+    void reallocate(size_t new_capacity) {
         T* new_array = allocate(new_capacity);
 
         size_t i = 0;
 
         // new_capacity can be smaller than the number of elements we had in the array
-        // in that case, inly copy the first _size - 1 elements
+        // in that case, preserve only the first min(_size, new_capacity) elements.
         size_t limit = std::min(_size, new_capacity);
 
         try {
-            // if type is move construtible OR move-only, move
+            // if type T is move construtible OR move-only, do move
             if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
                 for (; i < limit; i++) {
                     new (new_array + i) T(std::move(_array[i]));
@@ -47,6 +47,8 @@ private:
 
         destruct(_array, _size);
         deallocate(_array);
+    
+        _size = limit;
         _capacity = new_capacity;
         _array = new_array;
     }
@@ -54,7 +56,7 @@ private:
     // double array size
     void grow() {
         size_t new_capacity = (_capacity == 0) ? 1 : _capacity * 2;
-        reserve(new_capacity);
+        reallocate(new_capacity);
     }
     
     // allocate raw memory
@@ -95,19 +97,16 @@ private:
     static void default_construct(T* arr, size_t i) {
         if (!arr) return;
 
-        size_t cur = i - 1;
+        size_t cur = i;
 
         try {
-            for (; cur >= 0; cur--) {
-                ::new (static_cast<void*>(arr + cur)) T();
+            for (; cur > 0; cur--) {
+                ::new (static_cast<void*>(arr + cur - 1)) T();
             }
-
-            _size = i;
         } catch (...) {
-            // we failed at index cur therefore cur has not been constructed to, therefore destruct from (i, cur)
-            i--;
-            for (; i > cur; i--) {
-                arr[i].~T();
+            // we failed at index cur therefore cur has not been constructed to, therefore destruct from [cur, i)
+            for (; cur < i; cur++) {
+                arr[cur].~T();
             }
 
             throw;
@@ -437,16 +436,23 @@ public:
             // _size is the last non-constructed index, therefore we need to destruct [sz, _size)
             // case 1 : sz = _size - 1 => _size - sz = 1; 1 element destructed, which is intended behavior
             // case 2 : sz = 0 => _size - sz = _size; empty the array, intended behavior
+
+            // static destruct will not update _size
             destruct(_array + sz, _size - sz);
             _size = sz;
         } else {
             if (sz > _capacity) {
-                // allocate new buffer of sz and relocate _arr into it
-                reserve(sz);
+                // allocate new buffer of sz and reallocate _arr into it
+                // non-static private reallocate() will change _size = sz
+                reallocate(sz);
             }
 
+            // it lies between _size and _capacity
             // construct in [_size, sz)
+
+            // static default_construct will not update _size
             default_construct(_array + _size, sz - _size);
+            _size = sz;
         }
     }
 
