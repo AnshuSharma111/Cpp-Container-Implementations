@@ -1,413 +1,469 @@
 #include <iostream>
 #include <cassert>
+#include <string>
+#include <vector>
 #include "../dynamic_array.h"
 
 using namespace std;
 
-int main() {
 
-    cout << "========== DynamicArray Tests ==========\n";
+// Helper to compare DynamicArray with std::vector
+template<typename T>
+void compare(DynamicArray<T>& a, vector<T>& b)
+{
+    assert(a.size() == b.size());
 
-    // =====================================
-    // Constructor
-    // =====================================
+    for(size_t i = 0; i < b.size(); i++)
+        assert(a[i] == b[i]);
+}
+
+
+// ===============================
+// Lifetime tracking class
+// ===============================
+
+struct Tracker {
+
+    static int constructions;
+    static int destructions;
+
+    int value;
+
+    Tracker(int v = 0)
+        : value(v)
     {
-        DynamicArray<int> arr;
-
-        assert(arr.size() == 0);
-        assert(arr.empty());
-
-        cout << "Constructor Test Passed\n";
+        constructions++;
     }
 
-    // =====================================
-    // push_back
-    // =====================================
+    Tracker(const Tracker& other)
+        : value(other.value)
     {
-        DynamicArray<int> arr;
-
-        arr.push_back(10);
-        arr.push_back(20);
-        arr.push_back(30);
-
-        assert(arr.size() == 3);
-        assert(arr[0] == 10);
-        assert(arr[1] == 20);
-        assert(arr[2] == 30);
-
-        cout << "push_back Test Passed\n";
+        constructions++;
     }
 
-    // =====================================
-    // Massive Reallocation
-    // =====================================
+    ~Tracker()
     {
-        DynamicArray<int> arr;
-
-        for (int i = 0; i < 50000; i++)
-            arr.push_back(i);
-
-        assert(arr.size() == 50000);
-
-        for (int i = 0; i < 50000; i++)
-            assert(arr[i] == i);
-
-        cout << "Reallocation Test Passed\n";
+        destructions++;
     }
 
-    // =====================================
-    // operator[]
-    // =====================================
+    bool operator==(const Tracker& other) const
     {
-        DynamicArray<int> arr;
-
-        for (int i = 0; i < 10; i++)
-            arr.push_back(i);
-
-        arr[5] = 100;
-
-        assert(arr[5] == 100);
-
-        cout << "operator[] Test Passed\n";
+        return value == other.value;
     }
+};
 
-    // =====================================
-    // Bounds Checking
-    // =====================================
-    {
-        DynamicArray<int> arr;
+int Tracker::constructions = 0;
+int Tracker::destructions = 0;
 
-        arr.push_back(1);
 
-        bool thrown = false;
 
-        try {
-            arr[10];
-        }
-        catch (...) {
-            thrown = true;
-        }
+int main()
+{
 
-        assert(thrown);
+cout << "========== Advanced DynamicArray Tests ==========\n";
 
-        cout << "Bounds Test Passed\n";
-    }
 
-    // =====================================
-    // front()
-    // =====================================
-    {
-        DynamicArray<int> arr;
+// =====================================
+// Empty operations
+// =====================================
+{
+    DynamicArray<int> arr;
 
-        arr.push_back(50);
-        arr.push_back(60);
+    assert(arr.size() == 0);
+    assert(arr.empty());
 
-        assert(arr.front() == 50);
+    bool thrown = false;
 
-        cout << "front() Test Passed\n";
-    }
-
-    // =====================================
-    // back()
-    // =====================================
-    {
-        DynamicArray<int> arr;
-
-        arr.push_back(50);
-        arr.push_back(60);
-
-        assert(arr.back() == 60);
-
-        cout << "back() Test Passed\n";
-    }
-
-    // =====================================
-    // pop_back()
-    // =====================================
-    {
-        DynamicArray<int> arr;
-
-        arr.push_back(1);
-        arr.push_back(2);
-        arr.push_back(3);
-
+    try {
         arr.pop_back();
-
-        assert(arr.size() == 2);
-        assert(arr.back() == 2);
-
-        cout << "pop_back Test Passed\n";
+    }
+    catch(...)
+    {
+        thrown = true;
     }
 
-    // =====================================
-    // insert(begin)
-    // =====================================
+    assert(thrown);
+
+    cout << "Empty Operations Passed\n";
+}
+
+
+
+// =====================================
+// Single element lifecycle
+// =====================================
+{
+    DynamicArray<int> arr;
+
+    arr.push_back(10);
+
+    assert(arr.front()==10);
+    assert(arr.back()==10);
+
+    arr.pop_back();
+
+    assert(arr.empty());
+
+    cout << "Single Element Passed\n";
+}
+
+
+
+// =====================================
+// Random push/pop stress
+// =====================================
+{
+    DynamicArray<int> arr;
+    vector<int> ref;
+
+
+    for(int i=0;i<10000;i++)
     {
-        DynamicArray<int> arr;
-
-        arr.push_back(2);
-        arr.push_back(3);
-
-        arr.insert(0,1);
-
-        assert(arr[0] == 1);
-        assert(arr[1] == 2);
-        assert(arr[2] == 3);
-
-        cout << "Insert Beginning Passed\n";
+        arr.push_back(i);
+        ref.push_back(i);
     }
 
-    // =====================================
-    // insert(middle)
-    // =====================================
+
+    for(int i=0;i<5000;i++)
     {
-        DynamicArray<int> arr;
-
-        arr.push_back(1);
-        arr.push_back(3);
-
-        arr.insert(1,2);
-
-        assert(arr[0] == 1);
-        assert(arr[1] == 2);
-        assert(arr[2] == 3);
-
-        cout << "Insert Middle Passed\n";
+        arr.pop_back();
+        ref.pop_back();
     }
 
-    // =====================================
-    // insert(end)
-    // =====================================
+
+    compare(arr,ref);
+
+    cout << "Push Pop Stress Passed\n";
+}
+
+
+
+// =====================================
+// Reallocation integrity
+// =====================================
+{
+    DynamicArray<string> arr;
+
+
+    for(int i=0;i<10000;i++)
     {
-        DynamicArray<int> arr;
-
-        arr.push_back(1);
-        arr.push_back(2);
-
-        arr.insert(2,3);
-
-        assert(arr.back() == 3);
-
-        cout << "Insert End Passed\n";
+        arr.push_back("hello_" + to_string(i));
     }
 
-    // =====================================
-    // remove(begin)
-    // =====================================
+
+    for(int i=0;i<10000;i++)
     {
-        DynamicArray<int> arr;
-
-        for(int i=1;i<=5;i++)
-            arr.push_back(i);
-
-        arr.remove(0);
-
-        assert(arr.size()==4);
-        assert(arr[0]==2);
-
-        cout << "Erase Beginning Passed\n";
+        assert(arr[i] == "hello_" + to_string(i));
     }
 
-    // =====================================
-    // remove(middle)
-    // =====================================
+
+    cout << "String Reallocation Passed\n";
+}
+
+
+
+// =====================================
+// Insert random positions
+// =====================================
+{
+    DynamicArray<int> arr;
+    vector<int> ref;
+
+
+    for(int i=0;i<100;i++)
     {
-        DynamicArray<int> arr;
+        int pos = i==0 ? 0 : i/2;
 
-        for(int i=1;i<=5;i++)
-            arr.push_back(i);
-
-        arr.remove(2);
-
-        assert(arr.size()==4);
-
-        assert(arr[0]==1);
-        assert(arr[1]==2);
-        assert(arr[2]==4);
-        assert(arr[3]==5);
-
-        cout << "Erase Middle Passed\n";
+        arr.insert(pos,i);
+        ref.insert(ref.begin()+pos,i);
     }
 
-    // =====================================
-    // remove(end)
-    // =====================================
+
+    compare(arr,ref);
+
+
+    cout << "Random Insert Passed\n";
+}
+
+
+
+// =====================================
+// Remove random positions
+// =====================================
+{
+    DynamicArray<int> arr;
+    vector<int> ref;
+
+
+    for(int i=0;i<100;i++)
     {
-        DynamicArray<int> arr;
-
-        arr.push_back(1);
-        arr.push_back(2);
-        arr.push_back(3);
-
-        arr.remove(2);
-
-        assert(arr.size()==2);
-        assert(arr.back()==2);
-
-        cout << "Erase End Passed\n";
+        arr.push_back(i);
+        ref.push_back(i);
     }
 
-    // =====================================
-    // clear()
-    // =====================================
-    {
-        DynamicArray<int> arr;
 
-        for(int i=0;i<100;i++)
-            arr.push_back(i);
+    for(int i=0;i<50;i++)
+    {
+        int pos = i % ref.size();
+
+        arr.remove(pos);
+        ref.erase(ref.begin()+pos);
+    }
+
+
+    compare(arr,ref);
+
+
+    cout << "Random Remove Passed\n";
+}
+
+
+
+// =====================================
+// Clear after huge allocation
+// =====================================
+{
+    DynamicArray<int> arr;
+
+
+    for(int i=0;i<100000;i++)
+        arr.push_back(i);
+
+
+    size_t old_capacity = arr.capacity();
+
+
+    arr.clear();
+
+
+    assert(arr.size()==0);
+    assert(arr.capacity()==old_capacity);
+
+
+    cout << "Clear Capacity Preservation Passed\n";
+}
+
+
+
+// =====================================
+// Reserve behaviour
+// =====================================
+{
+    DynamicArray<int> arr;
+
+
+    arr.reserve(1000);
+
+
+    assert(arr.capacity() >= 1000);
+    assert(arr.size()==0);
+
+
+    for(int i=0;i<1000;i++)
+        arr.push_back(i);
+
+
+    for(int i=0;i<1000;i++)
+        assert(arr[i]==i);
+
+
+    cout << "Reserve Behaviour Passed\n";
+}
+
+
+
+// =====================================
+// Resize growth initialization
+// =====================================
+{
+    DynamicArray<int> arr;
+
+
+    arr.resize(100);
+
+
+    assert(arr.size()==100);
+
+
+    for(int i=0;i<100;i++)
+        assert(arr[i]==0);
+
+
+
+    arr.resize(10);
+
+
+    assert(arr.size()==10);
+
+
+    cout << "Resize Growth/Shrink Passed\n";
+}
+
+
+
+// =====================================
+// Copy deep copy stress
+// =====================================
+{
+    DynamicArray<int> a;
+
+
+    for(int i=0;i<10000;i++)
+        a.push_back(i);
+
+
+
+    DynamicArray<int> b=a;
+
+
+
+    for(int i=0;i<10000;i++)
+        assert(a[i]==b[i]);
+
+
+
+    for(int i=0;i<10000;i++)
+        b[i]=-1;
+
+
+
+    for(int i=0;i<10000;i++)
+        assert(a[i]==i);
+
+
+
+    cout << "Deep Copy Stress Passed\n";
+}
+
+
+
+// =====================================
+// Move leaves valid object
+// =====================================
+{
+    DynamicArray<int> a;
+
+
+    for(int i=0;i<100;i++)
+        a.push_back(i);
+
+
+
+    DynamicArray<int> b(std::move(a));
+
+
+    assert(b.size()==100);
+
+
+
+    // moved-from object should still be usable
+
+    a.push_back(500);
+
+
+    assert(a.back()==500);
+
+
+
+    cout << "Move Validity Passed\n";
+}
+
+
+
+// =====================================
+// Self move assignment
+// =====================================
+{
+    DynamicArray<int> arr;
+
+
+    for(int i=0;i<20;i++)
+        arr.push_back(i);
+
+
+    arr = std::move(arr);
+
+
+    assert(arr.size()==20);
+
+
+    for(int i=0;i<20;i++)
+        assert(arr[i]==i);
+
+
+    cout << "Self Move Assignment Passed\n";
+}
+
+
+
+// =====================================
+// Object lifetime test
+// =====================================
+{
+    Tracker::constructions = 0;
+    Tracker::destructions = 0;
+
+
+    {
+        DynamicArray<Tracker> arr;
+
+
+        for(int i=0;i<1000;i++)
+            arr.push_back(Tracker(i));
+
 
         arr.clear();
-
-        assert(arr.size()==0);
-        assert(arr.empty());
-
-        cout << "Clear Test Passed\n";
     }
 
-    // =====================================
-    // resize()
-    // =====================================
+
+    assert(
+        Tracker::constructions ==
+        Tracker::destructions
+    );
+
+
+    cout << "Object Lifetime Passed\n";
+}
+
+
+
+// =====================================
+// Bounds tests
+// =====================================
+{
+    DynamicArray<int> arr;
+
+
+    arr.push_back(1);
+
+
+    bool thrown=false;
+
+
+    try
     {
-        DynamicArray<int> arr;
-
-        arr.resize(10);
-
-        assert(arr.size()==10);
-
-        arr.resize(5);
-
-        assert(arr.size()==5);
-
-        cout << "Resize Test Passed\n";
+        arr[1];
     }
-
-    // =====================================
-    // reserve()
-    // =====================================
-    // {
-    //     DynamicArray<int> arr;
-
-    //     arr.reserve(100);
-
-    //     assert(arr.capacity() >= 100);
-
-    //     cout << "Reserve Test Passed\n";
-    // }
-
-    // =====================================
-    // Copy Constructor
-    // =====================================
+    catch(...)
     {
-        DynamicArray<int> arr;
-
-        for(int i=0;i<10;i++)
-            arr.push_back(i);
-
-        DynamicArray<int> copy(arr);
-
-        copy[0]=100;
-
-        assert(arr[0]==0);
-        assert(copy[0]==100);
-
-        cout << "Copy Constructor Passed\n";
+        thrown=true;
     }
 
-    // =====================================
-    // Copy Assignment
-    // =====================================
-    {
-        DynamicArray<int> arr;
 
-        for(int i=0;i<10;i++)
-            arr.push_back(i);
+    assert(thrown);
 
-        DynamicArray<int> copy;
 
-        copy = arr;
 
-        copy[5]=999;
+    cout << "Bounds Stress Passed\n";
+}
 
-        assert(arr[5]==5);
-        assert(copy[5]==999);
 
-        cout << "Copy Assignment Passed\n";
-    }
 
-    // =====================================
-    // Move Constructor
-    // =====================================
-    {
-        DynamicArray<int> arr;
+cout << "\n====================================\n";
+cout << "ALL ADVANCED TESTS PASSED\n";
+cout << "====================================\n";
 
-        arr.push_back(1);
-        arr.push_back(2);
 
-        DynamicArray<int> moved(std::move(arr));
+return 0;
 
-        assert(moved.size()==2);
-
-        cout << "Move Constructor Passed\n";
-    }
-
-    // =====================================
-    // Move Assignment
-    // =====================================
-    {
-        DynamicArray<int> arr;
-
-        arr.push_back(5);
-        arr.push_back(6);
-
-        DynamicArray<int> other;
-
-        other = std::move(arr);
-
-        assert(other.size()==2);
-
-        cout << "Move Assignment Passed\n";
-    }
-
-    // =====================================
-    // Self Assignment
-    // =====================================
-    {
-        DynamicArray<int> arr;
-
-        for(int i=0;i<10;i++)
-            arr.push_back(i);
-
-        arr = arr;
-
-        for(int i=0;i<10;i++)
-            assert(arr[i]==i);
-
-        cout << "Self Assignment Passed\n";
-    }
-
-    // =====================================
-    // Stress Test
-    // =====================================
-    // {
-    //     DynamicArray<int> arr;
-
-    //     for(int i=0;i<100000;i++)
-    //         arr.push_back(i);
-
-    //     for(int i=0;i<50000;i++)
-    //         arr.pop_back();
-
-    //     for(int i=0;i<25000;i++)
-    //         arr.erase(0);
-
-    //     assert(arr.size()==25000);
-
-    //     cout << "Stress Test Passed\n";
-    // }
-
-    cout << "\n====================================\n";
-    cout << "ALL TESTS PASSED\n";
-    cout << "====================================\n";
-
-    return 0;
 }
