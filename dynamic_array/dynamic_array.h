@@ -456,6 +456,16 @@ public:
         }
     }
 
+    // reserve() function that increases _capacity of container
+    // behavior: if sz is less than or equal to _capacity, nothing happens
+    //           if sz is greater than _capacity, the container increase capacity to sz
+    void reserve (size_t sz) {
+        if (sz <= _capacity) return;
+
+        // reallocate array into a new buffer of size sz
+        reallocate(sz);
+    }
+
     // clear function to empty the container
     void clear () noexcept {
         destruct(_array, _size);
